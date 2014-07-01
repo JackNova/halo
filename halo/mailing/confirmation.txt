@@ -1,0 +1,11 @@
+{{ name }},
+
+Please confirm your email address at {{ site_name }}.
+
+Confirming your email address will give you full access to {{ site_name}} and all future notifications will be sent to this email address.
+
+To confirm your address click on the link below (or copy and paste the URL into your browser).
+
+{{ link }}
+
+If you have any concerns, please contact us at {{ contact }}.
