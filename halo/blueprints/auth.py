@@ -25,6 +25,12 @@ With oauth/authenticate: if the user is signed into twitter.com and has previous
 With oauth/authorize: the user will see the allow screen regardless if they have previously authorized the app.
 
 Force login forces the user to enter their credentials to ensure the correct users account is authorized.
+
+TESTING: you can test login with the url for example:
+
+http://domain.com/auth/instagram/login/?device_id=0&platform=Android&return_url=/auth/success/
+
+where "auth" is the url prefix of the blueprint
 """
 
 # optional arguments you can pass to connect method using query string in url
@@ -90,11 +96,14 @@ def connect(service):
 
     # use has authorized and we have access token
     access_token_key, access_token_secret, profile = result
-    user_id = session.pop('user_id')
-    device_id = session.pop('device_id')
-    return_url = session.pop('return_url')
-    platform = session.pop('platform')
-    app_id = session.pop('app_id')
+    try:
+        user_id = session.pop('user_id')
+        device_id = session.pop('device_id')
+        return_url = session.pop('return_url')
+        platform = session.pop('platform')
+        app_id = session.pop('app_id')
+    except KeyError:
+        return 'Please enable cookies and try again.', 401
 
     #profile = login.get_profile(access_token_key, access_token_secret)
     account_id = profile['id']
