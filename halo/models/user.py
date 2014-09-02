@@ -19,74 +19,15 @@ class BaseUser(db.Model):
     LOGIN_SERVICES = {}
     ADD_ACCOUNT_SERVICES = {}
 
-    # the number of duplicate subscription_order_id allowed
-    # this is used to prevent piracy but also allow user to restore
-    # purchases on multiple devices
-    MAX_DUPLICATE_ORDER_ID = 2
-
-    class FeatureNotSupported(Exception): pass
-
-    plan = NotImplementedError()
-    PLANS = NotImplementedError()
-
-    # device for the web is the id of the account used for initial login
-    # if registration is done using email then device_id and device_type are
-    # both null
-    device_id = CharField(null=True)
-    device_type = CharField(null=True) # eg. twitter, facebook, android, ios
-
     created = DateTimeField(default=datetime.now)
 
-    # required to know how to send notifications to this user
-    platform = CharField(choices=[
-        ('Web', 'Web'),
-        ('Windows8', 'Windows 8'),
-        ('Android', 'Android'),
-        ('iOS', 'iOS'),
-    ])
-
-    # user settings (all are optional and currently only used for web users)
-    name = CharField(null=True)
-    # currently no unique constraint on email just in case multiple devices
-    email = CharField(null=True)
-    passhash = CharField(null=True)
-    email_confirmed = BooleanField(default=False)
-
-    # override this if using multiapps
-    app_id = NotImplementedError()
-
-    # the gcm, apn, or wns id for push messaging (use email for web users)
-    messaging_id = CharField(index=True, unique=True, null=True)
-
-    # global setting for notifications (when false, disables notifications
-    # for all linked accounts)
-    notifications = BooleanField(default=True)
-
-    # the stripe customer id, or the purchaseToken on Android
-    #subscription_id = CharField(null=True)
-
-    # on Android the orderId should be checked to make sure it is unique
-    # might be able to get rid of this and just use subscription_id value instead
-    #subscription_order_id = CharField(null=True, index=True)
-
-    # used to calculate expiration of subscription so we can check if it's been
-    # renewed
-    #subscription_creation = DateTimeField(null=True)
-
-    def set_password(self, password):
-        self.passhash = generate_password_hash(password)
-
-    def check_password(self, password):
-        return check_password_hash(self.passhash, password)
-
     def __jsonify__(self, *extra_fields):
-        """Serialize model to JSON that can be viewed by client. Used by jsonify().
+        """Serialize model to JSON that can be viewed by client. Used by
+        halo.endpoints.util.jsonify().
         """
-        safe_fields = ['name', 'email', 'platform', 'notifications',
-                       'plan', 'email_confirmed'] + list(extra_fields)
-        safe_fields = [field for field in safe_fields if hasattr(self, field)]
+        extra_fields = [field for field in safe_fields if hasattr(self, field)]
         s = Serializer()
-        return s.serialize_object(self, fields={self.__class__: safe_fields})
+        return s.serialize_object(self, fields={self.__class__: extra_fields})
 
     @classmethod
     def useraccount_model(cls):
@@ -98,29 +39,20 @@ class BaseUser(db.Model):
 
     def assert_add_account_supported(self, account_id, service):
         """Override this if you we want to support only one account per
-        user or per service
+        user or per service. Called in self.add_account().
         """
-        assert not isinstance(self.PLANS, NotImplementedError) and \
-                not isinstance(self.plan, NotImplementedError)
+        pass
 
-        # check if adding another account is supported by plan
-        # FIXME: account id is not the row id
-        num_accounts = self.get_num_accounts(account_id)
-
-        plan_features = self.PLANS[self.plan]
-        #return num_accounts >= plan_features['accounts']
-
-        if num_accounts >= plan_features['accounts']:
-            raise self.FeatureNotSupported(
-                'Current plan doesn\'t support adding another account')
-
-    def get_num_accounts(self, account_id=None):
+    def get_num_accounts(self, exclude_id=None):
+        """Returns the number of accounts attached to this user, and
+        exclude exclude_id from the count.
+        """
         UserAccount = self.useraccount_model()
 
         if account_id is not None:
             return UserAccount.select()\
                     .where((UserAccount.user == self.id) & \
-                           (UserAccount.account != account_id)).count()
+                           (UserAccount.account != exclude_id)).count()
         else:
             return UserAccount.select()\
                 .where(UserAccount.user == self.id).count()
@@ -151,7 +83,8 @@ class BaseUser(db.Model):
         # remove the record from the many-to-many table
         # doesn't delete the account record (use a cron job for that)
         UserAccount.delete().where((UserAccount.user == self.id) & \
-                                   (UserAccount.account == account_id)).execute()
+                                   (UserAccount.account == account_id)).\
+                execute()
 
     @classmethod
     def connect_user_account(cls, id, account_id, service,
@@ -165,10 +98,80 @@ class BaseUser(db.Model):
         return user
 
     @classmethod
+    def disconnect_all(cls, id):
+        UserAccount = cls.useraccount_model()
+        UserAccount.delete().where(UserAccount.user == id).execute()
+
+    @classmethod
+    def disconnect(cls, id, account_id):
+        # TODO: fix
+        UserAccount = cls.useraccount_model()
+        UserAccount.delete().where((UserAccount.user == id) & \
+                                   (UserAccount.account == account_id)).\
+                execute()
+
+    @classmethod
+    def disconnect_service(cls, id, service):
+        UserAccount = cls.useraccount_model()
+        Account = cls.account_model()
+        q = UserAccount.select().join(Account).where(
+            (UserAccount.user == id) & (Account.service == service))\
+                .execute()
+        for row in q:
+            row.delete_instance()
+
+    def connected_accounts(self):
+        # TODO: attach enabled to accounts
+        UserAccount = self.useraccount_model()
+        Account = self.account_model()
+        query = Account.select().join(UserAccount).where(
+            UserAccount.user == self.id)
+        accounts = [account for account in query]
+        return accounts
+
+    def logout_all(self):
+        self.disconnect_all(self.id)
+
+    def logout(self, account_id):
+        # TODO: fix
+        self.disconnect(self.id, account_id)
+
+
+class DeviceUser(BaseUser):
+    # device for the web is the id of the account used for initial login
+    # if registration is done using email then device_id and device_type are
+    # both null
+    device_id = CharField(null=True)
+    device_type = CharField(null=True) # eg. twitter, facebook, android, ios
+
+    # the gcm, apn, or wns id for push messaging (use email for web users)
+    messaging_id = CharField(index=True, unique=True, null=True)
+
+    # global setting for notifications (when false, disables notifications
+    # for all linked accounts)
+    notifications = BooleanField(default=True)
+
+    # required to know how to send notifications to this user
+    platform = CharField(choices=[
+        ('Web', 'Web'),
+        ('Windows8', 'Windows 8'),
+        ('Android', 'Android'),
+        ('iOS', 'iOS'),
+    ])
+
+    # override this if using multiapps
+    app_id = NotImplementedError()
+
+    def __jsonify__(self, *extra_fields):
+        extra_fields = ['platform', 'notifications'] + list(extra_fields)
+        return super(EmailUser, self).__jsonify__(extra_fields)
+
+    @classmethod
     def login_with_account(cls, account_id, service, device_id, platform,
                            access_token_key, access_token_secret, profile,
                            messaging_id=None, app_id=None):
-        """Will create a user record if it doesn't already exist
+        """Will create a user record if it doesn't already exist. Used by the
+        auth blueprint.
         """
         if platform == 'Web':
             # on the web the device id is the primary account id
@@ -205,6 +208,32 @@ class BaseUser(db.Model):
                          access_token_secret, profile)
         return user
 
+    # peewee currently doesn't support composite keys so use unique
+    # constraint
+    class Meta:
+        indexes = (
+            # create a unique on device_id/device_type
+            (('device_id', 'device_type'), True),
+        )
+
+class EmailUser(BaseUser):
+    # user settings (all are optional and currently only used for web users)
+    name = CharField(null=True)
+    # currently no unique constraint on email just in case multiple devices
+    email = CharField(null=True)
+    passhash = CharField(null=True)
+    email_confirmed = BooleanField(default=False)
+
+    def set_password(self, password):
+        self.passhash = generate_password_hash(password)
+
+    def check_password(self, password):
+        return check_password_hash(self.passhash, password)
+
+    def __jsonify__(self, *extra_fields):
+        extra_fields = ['name', 'email', 'email_confirmed'] + list(extra_fields)
+        return super(EmailUser, self).__jsonify__(extra_fields)
+
     @classmethod
     def login_with_email(cls, email, password):
         try:
@@ -216,48 +245,3 @@ class BaseUser(db.Model):
             raise ValueError('Password incorrect')
 
         return user
-
-    @classmethod
-    def disconnect_all(cls, id):
-        UserAccount = cls.useraccount_model()
-        UserAccount.delete().where(UserAccount.user == id).execute()
-
-    @classmethod
-    def disconnect(cls, id, account_id):
-        # TODO: fix
-        UserAccount = cls.useraccount_model()
-        UserAccount.delete().where((UserAccount.user == id) & \
-                                   (UserAccount.account == account_id)).execute()
-
-    @classmethod
-    def disconnect_service(cls, id, service):
-        UserAccount = cls.useraccount_model()
-        Account = cls.account_model()
-        q = UserAccount.select().join(Account).where(
-            (UserAccount.user == id) & (Account.service == service))\
-                .execute()
-        for row in q:
-            row.delete_instance()
-
-    def connected_accounts(self):
-        # TODO: attach enabled to accounts
-        UserAccount = self.useraccount_model()
-        Account = self.account_model()
-        query = Account.select().join(UserAccount).where(UserAccount.user == self.id)
-        accounts = [account for account in query]
-        return accounts
-
-    def logout_all(self):
-        self.disconnect_all(self.id)
-
-    def logout(self, account_id):
-        # TODO: fix
-        self.disconnect(self.id, account_id)
-
-    # peewee currently doesn't support composite keys so use unique
-    # constraint
-    class Meta:
-        indexes = (
-            # create a unique on device_id/device_type
-            (('device_id', 'device_type'), True),
-        )

@@ -18,12 +18,13 @@ class BaseUserAccount(db.Model):
 
     created = DateTimeField(default=datetime.now)
     # allow user to control notifications per account
-    notifications = BooleanField(default=True)
+    #notifications = BooleanField(default=True)
     # this field is used to deactivate an account belonging to a user if, for
     # example, they downgrade their subscription from multi to single account
-    enabled = BooleanField(default=True)
+    #enabled = BooleanField(default=True)
 
-    MERGE = ['notifications', 'enabled']
+    #MERGE = ['notifications', 'enabled']
+    MERGE = []
 
     def merge_with_account(self, account):
         for field in self.MERGE:
