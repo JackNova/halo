@@ -3,7 +3,12 @@ from functools import wraps
 from peewee import Model
 from flask import session, current_app, request, abort, g, Response
 from itsdangerous import URLSafeSerializer
-from models import User, UserAccount
+from models import User
+
+try:
+    from models import UserAccount
+except ImportError:
+    pass
 
 #
 # DECORATORS
